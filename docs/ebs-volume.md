@@ -81,8 +81,10 @@ sudo mkdir -p /mnt/babelfish-data/pgdata
 # Check the actual UID/GID from the image before starting.
 docker compose run --rm --no-deps --entrypoint sh babelfish -c 'id -u; id -g'
 
-# Then make the host directory owned by that UID/GID.
-# Example if the image prints 1001 and 1001:
+# If Docker user namespace remapping is not enabled, make the host
+# directory owned by that same UID/GID.
+# If user namespace remapping is enabled, use the mapped host UID/GID
+# from the troubleshooting section below instead.
 sudo chown -R 1001:1001 /mnt/babelfish-data/pgdata
 sudo chmod 700 /mnt/babelfish-data/pgdata
 ```
@@ -133,33 +135,101 @@ If `initdb` fails with `could not change permissions of directory` or `Permissio
 
 ```bash
 grep '^BABELFISH_DATA_PATH=' .env
-docker compose config | grep -A2 '/var/lib/babelfish/data'
+docker compose config | grep -B3 -A5 '/var/lib/babelfish/data'
 ```
 
-Then check the UID/GID used by the image:
+Then check the UID/GID and UID/GID mapping used by the image:
 
 ```bash
-docker compose run --rm --no-deps --entrypoint sh babelfish -c 'id -u; id -g'
+docker compose run --rm --no-deps --entrypoint sh babelfish -c '
+  echo "id:"
+  id
+  echo "uid_map:"
+  cat /proc/self/uid_map
+  echo "gid_map:"
+  cat /proc/self/gid_map
+'
 ```
 
-Recreate the data directory using that UID/GID. Do not use `install -o 1001` unless a host user named `1001` exists; use `chown` with numeric IDs instead.
+### Fix used on this EC2 server
 
-Example if the image prints `1001:1001`:
+On this server, the container reported:
+
+```text
+uid=1001(postgres) gid=1001(postgres)
+uid_map:
+         0       1000          1
+         1     100000      65536
+gid_map:
+         0       1000          1
+         1     100000      65536
+```
+
+That means Docker user namespace remapping is enabled. Container UID/GID `1001:1001` maps to host UID/GID `101000:101000`:
+
+```text
+host id = 100000 + (container id - 1)
+host id = 100000 + (1001 - 1) = 101000
+```
+
+If the host directory is owned by `1001:1001`, it appears inside the container as `nobody:nogroup` / `65534:65534` and PostgreSQL cannot write to it.
+
+The working fix was:
 
 ```bash
+cd ~/docker-babelfishpg
+
 docker compose down
+
 sudo rm -rf /mnt/babelfish-data/pgdata
 sudo mkdir -p /mnt/babelfish-data/pgdata
-sudo chown 1001:1001 /mnt/babelfish-data/pgdata
+sudo chown 101000:101000 /mnt/babelfish-data/pgdata
 sudo chmod 700 /mnt/babelfish-data/pgdata
-docker compose up -d --no-build babelfish
+
+ls -ldn /mnt/babelfish-data/pgdata
 ```
 
-Alternatively, GNU `install` can use numeric IDs with `#` prefixes:
+Expected host ownership:
+
+```text
+drwx------ ... 101000 101000 ... /mnt/babelfish-data/pgdata
+```
+
+Verify from inside the container:
 
 ```bash
-sudo install -d -m 700 -o '#1001' -g '#1001' /mnt/babelfish-data/pgdata
+docker compose run --rm --no-deps --entrypoint sh babelfish -c '
+  id
+  ls -ldn /var/lib/babelfish/data
+  touch /var/lib/babelfish/data/.perm-test
+  rm /var/lib/babelfish/data/.perm-test
+  echo writable
+'
 ```
+
+Expected container ownership/result:
+
+```text
+drwx------ ... 1001 1001 ... /var/lib/babelfish/data
+writable
+```
+
+Then start:
+
+```bash
+docker compose up -d --no-build babelfish
+docker compose logs -f babelfish
+```
+
+A successful startup includes:
+
+```text
+Success. You can now start the database server
+...
+database system is ready to accept connections
+```
+
+### If Docker is installed as Snap
 
 If permissions still fail even with correct ownership, check whether Docker was installed as a Snap package. Snap Docker can block bind mounts under `/mnt` unless removable media access is connected:
 
