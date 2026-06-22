@@ -2,16 +2,46 @@
 
 ## EC2/EBS data volume
 
-Mount the attached EBS volume on the host and point Compose at it:
+Mount the attached EBS volume on the host and point Compose at a subdirectory under it:
 
 ```env
-BABELFISH_DATA_PATH=/mnt/babelfish-data
+BABELFISH_DATA_PATH=/mnt/babelfish-data/pgdata
 DATABASE=babelfish_db
 MIGRATION_MODE=multi-db
 TSQL_DATABASE=scoringdb
 ```
 
 The container stores PostgreSQL/Babelfish data at `/var/lib/babelfish/data`.
+
+Use a subdirectory like `/mnt/babelfish-data/pgdata`, not the mount root `/mnt/babelfish-data`, because ext4 creates `lost+found` at the mount root and PostgreSQL `initdb` requires an empty data directory.
+
+The host data directory must be writable by the container's `postgres` user. Check the actual UID/GID from the image:
+
+```bash
+docker compose run --rm --no-deps --entrypoint sh babelfish -c 'id -u; id -g'
+```
+
+Then set ownership with numeric IDs. Example if the image prints `1001` and `1001`:
+
+```bash
+sudo mkdir -p /mnt/babelfish-data/pgdata
+sudo chown 1001:1001 /mnt/babelfish-data/pgdata
+sudo chmod 700 /mnt/babelfish-data/pgdata
+```
+
+If using GNU `install`, numeric IDs need `#` prefixes:
+
+```bash
+sudo install -d -m 700 -o '#1001' -g '#1001' /mnt/babelfish-data/pgdata
+```
+
+If Docker was installed as a Snap package, bind mounts under `/mnt` may need Snap removable-media access:
+
+```bash
+snap list docker || true
+sudo snap connect docker:removable-media || true
+sudo snap restart docker || true
+```
 
 ## T-SQL database and users
 

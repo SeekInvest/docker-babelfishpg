@@ -6,10 +6,18 @@ This project is configured to keep Babelfish/PostgreSQL data on an external EBS 
 /mnt/babelfish-data
 ```
 
+Do **not** point PostgreSQL directly at the mount root because an ext4 filesystem contains a `lost+found` directory there, and `initdb` requires an empty data directory.
+
+Use a subdirectory for the actual PostgreSQL/Babelfish data:
+
+```text
+/mnt/babelfish-data/pgdata
+```
+
 The Docker Compose data path should point there via `.env`:
 
 ```env
-BABELFISH_DATA_PATH=/mnt/babelfish-data
+BABELFISH_DATA_PATH=/mnt/babelfish-data/pgdata
 ```
 
 ## Current example layout
@@ -68,7 +76,15 @@ If it reports `data`, format and mount:
 sudo mkfs.ext4 /dev/nvme1n1
 sudo mkdir -p /mnt/babelfish-data
 sudo mount /dev/nvme1n1 /mnt/babelfish-data
-sudo chown -R ubuntu:ubuntu /mnt/babelfish-data
+sudo mkdir -p /mnt/babelfish-data/pgdata
+# The container runs PostgreSQL as the container's postgres user.
+# Check the actual UID/GID from the image before starting.
+docker compose run --rm --no-deps --entrypoint sh babelfish -c 'id -u; id -g'
+
+# Then make the host directory owned by that UID/GID.
+# Example if the image prints 1001 and 1001:
+sudo chown -R 1001:1001 /mnt/babelfish-data/pgdata
+sudo chmod 700 /mnt/babelfish-data/pgdata
 ```
 
 Get the UUID:
@@ -100,8 +116,8 @@ From the repo directory:
 cd ~/docker-babelfishpg
 
 grep -q '^BABELFISH_DATA_PATH=' .env \
-  && sed -i 's|^BABELFISH_DATA_PATH=.*|BABELFISH_DATA_PATH=/mnt/babelfish-data|' .env \
-  || echo 'BABELFISH_DATA_PATH=/mnt/babelfish-data' >> .env
+  && sed -i 's|^BABELFISH_DATA_PATH=.*|BABELFISH_DATA_PATH=/mnt/babelfish-data/pgdata|' .env \
+  || echo 'BABELFISH_DATA_PATH=/mnt/babelfish-data/pgdata' >> .env
 
 grep '^BABELFISH_DATA_PATH=' .env
 ```
@@ -109,16 +125,58 @@ grep '^BABELFISH_DATA_PATH=' .env
 Start Babelfish:
 
 ```bash
-docker compose up -d
+docker compose up -d --no-build babelfish
 docker compose ps
 ```
 
+If `initdb` fails with `could not change permissions of directory` or `Permission denied`, first confirm Compose is using the subdirectory:
+
+```bash
+grep '^BABELFISH_DATA_PATH=' .env
+docker compose config | grep -A2 '/var/lib/babelfish/data'
+```
+
+Then check the UID/GID used by the image:
+
+```bash
+docker compose run --rm --no-deps --entrypoint sh babelfish -c 'id -u; id -g'
+```
+
+Recreate the data directory using that UID/GID. Do not use `install -o 1001` unless a host user named `1001` exists; use `chown` with numeric IDs instead.
+
+Example if the image prints `1001:1001`:
+
+```bash
+docker compose down
+sudo rm -rf /mnt/babelfish-data/pgdata
+sudo mkdir -p /mnt/babelfish-data/pgdata
+sudo chown 1001:1001 /mnt/babelfish-data/pgdata
+sudo chmod 700 /mnt/babelfish-data/pgdata
+docker compose up -d --no-build babelfish
+```
+
+Alternatively, GNU `install` can use numeric IDs with `#` prefixes:
+
+```bash
+sudo install -d -m 700 -o '#1001' -g '#1001' /mnt/babelfish-data/pgdata
+```
+
+If permissions still fail even with correct ownership, check whether Docker was installed as a Snap package. Snap Docker can block bind mounts under `/mnt` unless removable media access is connected:
+
+```bash
+snap list docker || true
+sudo snap connect docker:removable-media || true
+sudo snap restart docker || true
+```
+
+Then retry `docker compose up -d --no-build babelfish`.
+
 ## Extending the external EBS volume
 
-If the external EBS volume is expanded in AWS, no Docker Compose or `.env` change is needed as long as the mount path remains the same:
+If the external EBS volume is expanded in AWS, no Docker Compose or `.env` change is needed as long as the data path remains the same:
 
 ```env
-BABELFISH_DATA_PATH=/mnt/babelfish-data
+BABELFISH_DATA_PATH=/mnt/babelfish-data/pgdata
 ```
 
 After increasing the EBS size in AWS, verify the OS sees the new size:
