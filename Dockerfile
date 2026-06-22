@@ -1,11 +1,11 @@
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 
 # Build stage
 FROM base AS builder
 
 # Specify babelfish version by using a tag from:
 # https://github.com/babelfish-for-postgresql/babelfish-for-postgresql/tags
-ARG BABELFISH_VERSION=BABEL_5_2_0__PG_17_5
+ARG BABELFISH_VERSION=BABEL_5_4_0__PG_17_7
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -15,7 +15,7 @@ RUN apt update && apt install -y --no-install-recommends\
 	libxslt-dev libssl-dev libreadline-dev zlib1g-dev\
 	libldap2-dev libpam0g-dev gettext uuid uuid-dev\
 	cmake lld apt-utils libossp-uuid-dev gnulib bison\
-	xsltproc icu-devtools libicu70\
+	xsltproc icu-devtools libicu74\
 	libicu-dev gawk\
 	curl openjdk-21-jre openssl\
 	g++ libssl-dev python-dev-is-python3 libpq-dev\
@@ -30,7 +30,8 @@ ENV BABELFISH_URL=https://github.com/${BABELFISH_REPO}
 ENV BABELFISH_TAG=${BABELFISH_VERSION}
 ENV BABELFISH_FILE=${BABELFISH_VERSION}.tar.gz
 
-RUN wget ${BABELFISH_URL}/releases/download/${BABELFISH_TAG}/${BABELFISH_FILE}
+RUN wget --tries=5 --waitretry=5 --retry-on-host-error \
+	${BABELFISH_URL}/releases/download/${BABELFISH_TAG}/${BABELFISH_FILE}
 RUN tar -xvzf ${BABELFISH_FILE}
 
 # Set environment variables
@@ -56,10 +57,11 @@ RUN cp ${ANTLR_CONTRIB}/${ANTLR_FILE} /usr/local/lib
 
 WORKDIR /workplace
 
-ENV ANTLR_DOWNLOAD=http://www.antlr.org/download
+ENV ANTLR_DOWNLOAD=https://www.antlr.org/download
 ENV ANTLR_CPP_SOURCE=antlr4-cpp-runtime-${ANTLR4_VERSION}-source.zip
 
-RUN wget ${ANTLR_DOWNLOAD}/${ANTLR_CPP_SOURCE}
+RUN wget --tries=5 --waitretry=5 --retry-on-host-error \
+	${ANTLR_DOWNLOAD}/${ANTLR_CPP_SOURCE}
 RUN unzip -d ${ANTLR_RUNTIME} ${ANTLR_CPP_SOURCE}
 
 WORKDIR ${ANTLR_RUNTIME}/build
@@ -108,7 +110,10 @@ WORKDIR ${PG_SRC}/contrib/babelfishpg_tds
 RUN make -j ${JOBS} && make PG_CONFIG=${PG_CONFIG} install
 
 WORKDIR ${PG_SRC}/contrib/babelfishpg_tsql
-RUN make -j ${JOBS} && make PG_CONFIG=${PG_CONFIG} install
+# GCC in Ubuntu 24.04 surfaces an ANTLR header warning that Babelfish's -Werror
+# treats as fatal; disable just that warning for the C++ TSQL sources.
+RUN make CXXFLAGS+=' -Wno-overloaded-virtual' -j ${JOBS} && \
+	make CXXFLAGS+=' -Wno-overloaded-virtual' PG_CONFIG=${PG_CONFIG} install
 
 # Run stage
 FROM base AS runner
@@ -120,8 +125,8 @@ ENTRYPOINT [ "/start.sh" ]
 # Install runtime dependencies
 RUN export DEBIAN_FRONTEND=noninteractive && \
 	apt update && apt install -y --no-install-recommends\
-	libssl3 openssl libldap-2.5-0 libxml2 libpam0g uuid libossp-uuid16\
-	libxslt1.1 libicu70 libpq5 unixodbc
+	adduser libssl3 openssl libldap2 libxml2 libpam0g uuid libossp-uuid16\
+	libxslt1.1 libicu74 libpq5 unixodbc freetds-bin
 
 RUN adduser postgres --home ${POSTGRES_USER_HOME}
 

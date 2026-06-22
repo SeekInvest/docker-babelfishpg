@@ -1,0 +1,20 @@
+services:
+  babelfish:
+    build: .
+    container_name: babelfish
+    environment:
+      USERNAME: ${USERNAME:-babelfish_user}
+      PASSWORD: ${PASSWORD:-12345678}
+      DATABASE: ${DATABASE:-babelfish_db}
+      MIGRATION_MODE: ${MIGRATION_MODE:-multi-db}
+      TSQL_DATABASE: ${TSQL_DATABASE:-scoringdb}
+      OLD_Scoring_API_MSSQL_USERNAME: ${OLD_Scoring_API_MSSQL_USERNAME:-}
+      OLD_Scoring_API_MSSQL_PASSWORD: ${OLD_Scoring_API_MSSQL_PASSWORD:-}
+      OLD_FINHUB_ETL_MSSQL_USERNAME: ${OLD_FINHUB_ETL_MSSQL_USERNAME:-}
+      OLD_FINHUB_ETL_MSSQL_PASSWORD: ${OLD_FINHUB_ETL_MSSQL_PASSWORD:-}
+    ports:
+      - "1433:1433"
+      - "5433:5432"
+    volumes:
+      - ${BABELFISH_DATA_PATH:-./data}:/var/lib/babelfish/data
+    restart: always
