@@ -1,5 +1,6 @@
 services:
   babelfish:
+    image: ${BABELFISH_IMAGE:-ocker-babelfishpg-babelfish-scoring-db:local}
     build: .
     container_name: babelfish
     environment:
